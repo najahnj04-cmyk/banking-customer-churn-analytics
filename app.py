@@ -155,9 +155,14 @@ with t_explorer:
     h1.metric('High-value screen matches', f'{len(high):,}')
     h2.metric('Exited in this group', f'{int((high.Exited==1).sum()):,}')
     h3.metric('Group churn rate', f'{(high.Exited.mean()*100):.2f}%' if len(high) else '0.00%')
-    cols = [c for c in ['CustomerId','Geography','Age','Tenure','CreditScore','NumOfProducts','Balance','EstimatedSalary','IsActiveMember','Customer status','Screening reason'] if c in high.columns]
-    st.dataframe(high[cols].sort_values(['Exited','Balance'],ascending=[False,False]), use_container_width=True, hide_index=True)
-    st.download_button('⬇️ Download high-value segment CSV', high[cols].to_csv(index=False).encode('utf-8'), 'high_value_churn_segment.csv', 'text/csv')
+    # Sort using the underlying Exited field before selecting display columns.
+    # Exited is intentionally not required in the visible table columns.
+    sort_cols = [c for c in ['Exited', 'Balance'] if c in high.columns]
+    sort_ascending = [False if c == 'Exited' else False for c in sort_cols]
+    high_sorted = high.sort_values(sort_cols, ascending=sort_ascending) if sort_cols else high
+    cols = [c for c in ['CustomerId','Geography','Age','Tenure','CreditScore','NumOfProducts','Balance','EstimatedSalary','IsActiveMember','Customer status','Screening reason'] if c in high_sorted.columns]
+    st.dataframe(high_sorted[cols], use_container_width=True, hide_index=True)
+    st.download_button('⬇️ Download high-value segment CSV', high_sorted[cols].to_csv(index=False).encode('utf-8'), 'high_value_churn_segment.csv', 'text/csv')
     st.caption('Use customer-level output only in authorized internal settings. Avoid exposing personal identifiers in public repositories or presentations.')
 
 with t_data:
@@ -181,4 +186,3 @@ with t_data:
 
 st.divider()
 st.caption(f'Source file: {DATA_PATH.name} • Showing {len(f):,} of {len(df):,} records after filters • Churn rate = exited customers / customers in current view.')
-
