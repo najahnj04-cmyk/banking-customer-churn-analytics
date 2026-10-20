@@ -1,298 +1,184 @@
-import os
 from pathlib import Path
-
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
-st.set_page_config(
-    page_title="European Bank | Churn Analytics",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title='European Bank | Churn Intelligence', page_icon='🏦', layout='wide', initial_sidebar_state='expanded')
+DATA_PATH = Path(__file__).parent / 'European_Bank P2.csv'
 
-DATA_PATH = Path(__file__).parent / "European_Bank P2.csv"
-
-st.markdown(
-    """
-    <style>
-    .main {background-color: #f7f9fc;}
-    [data-testid="stMetric"] {
-        background: white;
-        border: 1px solid #e7ebf2;
-        padding: 16px 18px;
-        border-radius: 12px;
-    }
-    .page-title {font-size: 2.2rem; font-weight: 750; color: #17365d;}
-    .sub-title {color: #5b6575; margin-top: -8px;}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown('''<style>
+.main {background:#f6f8fc}.block-container{padding-top:1.5rem;padding-bottom:2rem}
+[data-testid="stMetric"]{background:#fff;border:1px solid #e4e9f2;padding:15px 18px;border-radius:12px}
+[data-testid="stMetricLabel"]{color:#5c6b82}.hero{padding:22px 26px;border-radius:16px;background:linear-gradient(120deg,#102b52,#215b91);color:white;margin-bottom:18px}
+.hero h1{font-size:2rem;margin:0}.hero p{margin:8px 0 0;color:#dbeafe}
+</style>''', unsafe_allow_html=True)
 
 @st.cache_data
-def load_csv(file_bytes=None):
-    if file_bytes is not None:
-        from io import BytesIO
-        return pd.read_csv(BytesIO(file_bytes))
-    return pd.read_csv(DATA_PATH)
+def load_data(path):
+    df = pd.read_csv(path)
+    # Normalize common binary fields while preserving the source values otherwise.
+    for c in ['Exited', 'HasCrCard', 'IsActiveMember']:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+    return df
 
-def normalize_columns(data):
-    data = data.copy()
-    expected = [
-        "Year", "CustomerId", "Surname", "CreditScore", "Geography", "Gender",
-        "Age", "Tenure", "Balance", "NumOfProducts", "HasCrCard",
-        "IsActiveMember", "EstimatedSalary", "Exited"
-    ]
-    missing = [col for col in expected if col not in data.columns]
-    if missing:
-        raise ValueError("Missing expected columns: " + ", ".join(missing))
-    for col in ["CreditScore", "Age", "Tenure", "Balance", "NumOfProducts",
-                "HasCrCard", "IsActiveMember", "EstimatedSalary", "Exited"]:
-        data[col] = pd.to_numeric(data[col], errors="coerce")
-    data = data.dropna(subset=["Exited", "Geography", "Age"])
-    data["Exited"] = data["Exited"].astype(int)
-    data["Activity status"] = data["IsActiveMember"].map({1: "Active", 0: "Inactive"}).fillna("Unknown")
-    data["Outcome"] = data["Exited"].map({1: "Exited", 0: "Retained"}).fillna("Unknown")
-    return data
-
-st.sidebar.title("📊 Churn Analytics")
-st.sidebar.caption("European Bank customer retention")
-uploaded = st.sidebar.file_uploader(
-    "Use another compatible CSV (optional)",
-    type=["csv"],
-    help="Upload a CSV with the same columns as the supplied European Bank dataset.",
-)
-
-try:
-    raw = load_csv(uploaded.getvalue() if uploaded else None)
-    df = normalize_columns(raw)
-except Exception as exc:
-    st.error(f"Could not load the dataset: {exc}")
-    st.info("Check that the CSV is in the repository and has the expected column names.")
+if not DATA_PATH.exists():
+    st.error('Dataset not found. Upload `European_Bank P2.csv` beside `app.py` in your GitHub repository.')
     st.stop()
 
-st.sidebar.divider()
-st.sidebar.subheader("Filter customers")
-countries = sorted(df["Geography"].dropna().astype(str).unique().tolist())
-selected_countries = st.sidebar.multiselect("Geography", countries, default=countries)
-genders = sorted(df["Gender"].dropna().astype(str).unique().tolist())
-selected_genders = st.sidebar.multiselect("Gender", genders, default=genders)
-min_age = int(df["Age"].min())
-max_age = int(df["Age"].max())
-age_range = st.sidebar.slider("Age range", min_age, max_age, (min_age, max_age))
-activity_options = ["Active", "Inactive", "Unknown"]
-selected_activity = st.sidebar.multiselect("Activity status", activity_options, default=activity_options)
-outcome_options = ["Retained", "Exited"]
-selected_outcomes = st.sidebar.multiselect("Customer outcome", outcome_options, default=outcome_options)
-
-filtered = df[
-    df["Geography"].astype(str).isin(selected_countries)
-    & df["Gender"].astype(str).isin(selected_genders)
-    & df["Age"].between(age_range[0], age_range[1])
-    & df["Activity status"].isin(selected_activity)
-    & df["Outcome"].isin(selected_outcomes)
-].copy()
-
-st.markdown('<div class="page-title">European Bank Customer Churn Dashboard</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="sub-title">Interactive exploratory data analysis, customer insights, and retention opportunities</div>',
-    unsafe_allow_html=True,
-)
-st.caption("Dataset: supplied European Bank P2 CSV · Filters apply across all tabs · Descriptive analysis, not causal proof")
-
-if filtered.empty:
-    st.warning("No customers match the selected filters. Adjust one or more filters in the sidebar.")
+df = load_data(DATA_PATH)
+required = {'Geography','Age','Tenure','Balance','EstimatedSalary','Exited'}
+missing = required - set(df.columns)
+if missing:
+    st.error(f'Dataset is missing required columns: {", ".join(sorted(missing))}')
     st.stop()
 
-total = len(filtered)
-exited = int(filtered["Exited"].sum())
-retained = total - exited
-exit_rate = exited / total if total else 0
-active_df = filtered[filtered["IsActiveMember"] == 1]
-inactive_df = filtered[filtered["IsActiveMember"] == 0]
-active_rate = active_df["Exited"].mean() if len(active_df) else 0
-inactive_rate = inactive_df["Exited"].mean() if len(inactive_df) else 0
-avg_age = filtered["Age"].mean()
-avg_balance = filtered["Balance"].mean()
+st.markdown('<div class="hero"><h1>🏦 European Bank Customer Churn Dashboard</h1><p>Interactive churn monitoring • customer segments • retention opportunities</p></div>', unsafe_allow_html=True)
+st.caption('Explore the supplied customer dataset. Associations shown here are descriptive and do not prove that a factor causes churn.')
 
-k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("Customers in view", f"{total:,}")
-k2.metric("Exited customers", f"{exited:,}")
-k3.metric("Exit rate", f"{exit_rate:.1%}")
-k4.metric("Average age", f"{avg_age:.1f}")
-k5.metric("Average balance", f"{avg_balance:,.0f}")
+with st.sidebar:
+    st.header('🔎 Segment filters')
+    countries = sorted(df['Geography'].dropna().astype(str).unique()) if 'Geography' in df else []
+    selected_countries = st.multiselect('Geography', countries, default=countries)
+    genders = sorted(df['Gender'].dropna().astype(str).unique()) if 'Gender' in df else []
+    selected_genders = st.multiselect('Gender', genders, default=genders)
+    age_min = int(pd.to_numeric(df['Age'], errors='coerce').min())
+    age_max = int(pd.to_numeric(df['Age'], errors='coerce').max())
+    age_range = st.slider('Age range', age_min, age_max, (age_min, age_max))
+    tenure_min = int(pd.to_numeric(df['Tenure'], errors='coerce').min())
+    tenure_max = int(pd.to_numeric(df['Tenure'], errors='coerce').max())
+    tenure_range = st.slider('Tenure (years)', tenure_min, tenure_max, (tenure_min, tenure_max))
+    activity_choice = st.selectbox('Activity status', ['All', 'Active members', 'Inactive members'])
+    outcome_choice = st.selectbox('Customer outcome', ['All customers', 'Exited', 'Retained'])
+    st.divider()
+    st.caption('Filters update every KPI, chart, and customer explorer.')
 
-overview, segments, explore, quality = st.tabs(
-    ["📌 Overview", "👥 Customer segments", "🔎 Explore the data", "🧹 Data quality"]
-)
+f = df.copy()
+f = f[f['Geography'].astype(str).isin(selected_countries)]
+if 'Gender' in f: f = f[f['Gender'].astype(str).isin(selected_genders)]
+f = f[pd.to_numeric(f['Age'], errors='coerce').between(*age_range)]
+f = f[pd.to_numeric(f['Tenure'], errors='coerce').between(*tenure_range)]
+if activity_choice == 'Active members' and 'IsActiveMember' in f: f = f[f['IsActiveMember'] == 1]
+elif activity_choice == 'Inactive members' and 'IsActiveMember' in f: f = f[f['IsActiveMember'] == 0]
+if outcome_choice == 'Exited': f = f[f['Exited'] == 1]
+elif outcome_choice == 'Retained': f = f[f['Exited'] == 0]
 
-with overview:
-    left, right = st.columns(2)
+if f.empty:
+    st.warning('No customers match the selected filters. Adjust one or more filters in the sidebar.')
+    st.stop()
+
+n = len(f); exited = int((f['Exited'] == 1).sum()); retained = int((f['Exited'] == 0).sum())
+rate = exited / n * 100 if n else 0
+avg_balance = pd.to_numeric(f['Balance'], errors='coerce').mean()
+avg_age = pd.to_numeric(f['Age'], errors='coerce').mean()
+
+k1,k2,k3,k4,k5 = st.columns(5)
+k1.metric('Customers in view', f'{n:,}')
+k2.metric('Churn rate', f'{rate:.2f}%')
+k3.metric('Exited customers', f'{exited:,}')
+k4.metric('Retained customers', f'{retained:,}')
+k5.metric('Average balance', f'€{avg_balance:,.0f}' if pd.notna(avg_balance) else 'N/A')
+st.divider()
+
+t_overview, t_segments, t_explorer, t_data = st.tabs(['📊 Overview', '🧭 Customer segments', '💎 High-value churn explorer', '🧪 Data quality & drill-down'])
+
+with t_overview:
+    left,right = st.columns(2)
     with left:
-        outcome_counts = filtered["Outcome"].value_counts().rename_axis("Outcome").reset_index(name="Customers")
-        fig = px.pie(
-            outcome_counts, names="Outcome", values="Customers", hole=0.58,
-            title="Customer outcome mix",
-            color="Outcome",
-            color_discrete_map={"Retained": "#247a69", "Exited": "#d95d5d"},
-        )
-        fig.update_layout(legend_title_text="", margin=dict(t=60, b=10, l=10, r=10))
+        st.subheader('Customer outcome')
+        outcome = pd.DataFrame({'Outcome':['Retained','Exited'],'Customers':[retained,exited]})
+        fig = px.pie(outcome, names='Outcome', values='Customers', hole=.62, color='Outcome', color_discrete_map={'Retained':'#2e8b72','Exited':'#e76f51'})
+        fig.update_traces(textposition='inside', textinfo='percent+label')
+        fig.update_layout(margin=dict(t=20,b=10,l=10,r=10), legend_title='Outcome')
         st.plotly_chart(fig, use_container_width=True)
     with right:
-        geo = filtered.groupby("Geography", as_index=False).agg(
-            Customers=("Exited", "size"), Exit_Rate=("Exited", "mean")
-        )
-        geo["Exit rate"] = geo["Exit_Rate"] * 100
-        fig = px.bar(
-            geo, x="Geography", y="Exit rate", text=geo["Exit rate"].map(lambda x: f"{x:.1f}%"),
-            title="Exit rate by geography", hover_data=["Customers"],
-            labels={"Exit rate": "Exit rate (%)"},
-        )
-        fig.update_traces(textposition="outside", marker_color="#2f75a5")
-        fig.update_layout(yaxis_ticksuffix="%", margin=dict(t=60, b=10, l=10, r=10))
+        st.subheader('Geography-wise churn')
+        geo = f.groupby('Geography', dropna=False).agg(Customers=('Exited','size'), Exited=('Exited','sum')).reset_index()
+        geo['Churn rate (%)'] = (geo['Exited']/geo['Customers']*100).round(2)
+        fig = px.bar(geo, x='Geography', y='Churn rate (%)', color='Geography', text='Churn rate (%)', hover_data=['Customers','Exited'], color_discrete_sequence=px.colors.qualitative.Set2)
+        fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+        fig.update_layout(showlegend=False, yaxis_title='Churn rate (%)', xaxis_title='', margin=dict(t=20,b=10))
         st.plotly_chart(fig, use_container_width=True)
-
-    left, right = st.columns(2)
+    left,right = st.columns(2)
     with left:
-        age_data = filtered.copy()
-        bins = [0, 25, 35, 45, 55, 65, 120]
-        labels = ["18–25", "26–35", "36–45", "46–55", "56–65", "66+"]
-        age_data["Age band"] = pd.cut(age_data["Age"], bins=bins, labels=labels, include_lowest=True)
-        age_plot = age_data.groupby("Age band", observed=False, as_index=False).agg(
-            Customers=("Exited", "size"), Exit_Rate=("Exited", "mean")
-        )
-        age_plot["Exit rate (%)"] = age_plot["Exit_Rate"] * 100
-        fig = px.bar(age_plot, x="Age band", y="Exit rate (%)", title="Exit rate by age band",
-                     hover_data=["Customers"], labels={"Age band": "Age band"})
-        fig.update_traces(marker_color="#6d83b5")
+        st.subheader('Age group comparison')
+        age_df = f.copy()
+        age_df['Age group'] = pd.cut(age_df['Age'], bins=[0,25,35,45,55,65,120], labels=['≤25','26–35','36–45','46–55','56–65','66+'], include_lowest=True)
+        ag = age_df.groupby('Age group', observed=False).agg(Customers=('Exited','size'), Exited=('Exited','sum')).reset_index()
+        ag['Churn rate (%)'] = (ag['Exited']/ag['Customers'].replace(0, pd.NA)*100).fillna(0)
+        fig = px.bar(ag, x='Age group', y='Churn rate (%)', text='Churn rate (%)', hover_data=['Customers','Exited'], color='Churn rate (%)', color_continuous_scale='Blues')
+        fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside'); fig.update_layout(coloraxis_showscale=False, margin=dict(t=20,b=10))
         st.plotly_chart(fig, use_container_width=True)
     with right:
-        activity_plot = filtered.groupby("Activity status", as_index=False).agg(
-            Customers=("Exited", "size"), Exit_Rate=("Exited", "mean")
-        )
-        activity_plot["Exit rate (%)"] = activity_plot["Exit_Rate"] * 100
-        fig = px.bar(activity_plot, x="Activity status", y="Exit rate (%)",
-                     title="Exit rate by activity status", hover_data=["Customers"])
-        fig.update_traces(marker_color="#e0a24a")
+        st.subheader('Tenure and churn')
+        ten = f.groupby('Tenure', dropna=False).agg(Customers=('Exited','size'), Exited=('Exited','sum')).reset_index()
+        ten['Churn rate (%)'] = (ten['Exited']/ten['Customers'].replace(0,pd.NA)*100).fillna(0)
+        fig = px.line(ten, x='Tenure', y='Churn rate (%)', markers=True, hover_data=['Customers','Exited'])
+        fig.update_traces(line=dict(width=3,color='#2878b5'))
+        fig.update_layout(xaxis_title='Tenure (years)', yaxis_title='Churn rate (%)', margin=dict(t=20,b=10))
         st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Quick interpretation")
-    if len(geo):
-        top_geo = geo.sort_values("Exit_Rate", ascending=False).iloc[0]
-        st.write(
-            f"Within the current filters, **{top_geo['Geography']}** has the highest observed exit rate "
-            f"({top_geo['Exit_Rate']:.1%}; {int(top_geo['Customers']):,} customers)."
-        )
-    if len(active_df) and len(inactive_df):
-        st.write(
-            f"Inactive customers have an exit rate of **{inactive_rate:.1%}**, compared with "
-            f"**{active_rate:.1%}** among active customers. This is an association, not proof that inactivity causes exit."
-        )
-
-with segments:
-    left, right = st.columns(2)
-    with left:
-        product_plot = filtered.groupby("NumOfProducts", as_index=False).agg(
-            Customers=("Exited", "size"), Exit_Rate=("Exited", "mean")
-        )
-        product_plot["Exit rate (%)"] = product_plot["Exit_Rate"] * 100
-        fig = px.bar(product_plot, x="NumOfProducts", y="Exit rate (%)",
-                     title="Exit rate by number of products", hover_data=["Customers"],
-                     labels={"NumOfProducts": "Number of products"})
-        fig.update_traces(marker_color="#8064a2")
+with t_segments:
+    st.subheader('Segment drill-down')
+    dimension = st.selectbox('Compare churn by', [c for c in ['Geography','Gender','IsActiveMember','HasCrCard','NumOfProducts','Tenure'] if c in f.columns], key='segment_dim')
+    seg = f.groupby(dimension, dropna=False).agg(Customers=('Exited','size'), Exited=('Exited','sum'), MeanAge=('Age','mean'), MeanBalance=('Balance','mean')).reset_index()
+    seg['Churn rate (%)'] = (seg['Exited']/seg['Customers']*100).round(2)
+    seg[dimension] = seg[dimension].astype(str)
+    a,b = st.columns([1.4,1])
+    with a:
+        fig = px.bar(seg.sort_values('Churn rate (%)',ascending=False), x=dimension, y='Churn rate (%)', color='Churn rate (%)', text='Churn rate (%)', hover_data=['Customers','Exited','MeanAge','MeanBalance'], color_continuous_scale='Teal')
+        fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside'); fig.update_layout(coloraxis_showscale=False, margin=dict(t=20,b=10))
         st.plotly_chart(fig, use_container_width=True)
-    with right:
-        gender_plot = filtered.groupby("Gender", as_index=False).agg(
-            Customers=("Exited", "size"), Exit_Rate=("Exited", "mean")
-        )
-        gender_plot["Exit rate (%)"] = gender_plot["Exit_Rate"] * 100
-        fig = px.bar(gender_plot, x="Gender", y="Exit rate (%)",
-                     title="Exit rate by gender", hover_data=["Customers"])
-        fig.update_traces(marker_color="#3b9a91")
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.subheader("Segment summary")
-    seg_cols = ["Geography", "Gender", "Age", "IsActiveMember", "NumOfProducts", "Balance", "CreditScore", "Exited"]
-    segment_data = filtered[seg_cols].copy()
-    segment_data["Age band"] = pd.cut(segment_data["Age"], [0,25,35,45,55,65,120],
-                                      labels=["18–25","26–35","36–45","46–55","56–65","66+"], include_lowest=True)
-    summary = segment_data.groupby(["Geography", "Gender", "Age band"], observed=True).agg(
-        Customers=("Exited", "size"),
-        Exited=("Exited", "sum"),
-        Exit_Rate=("Exited", "mean"),
-        Mean_Balance=("Balance", "mean"),
-    ).reset_index()
-    summary["Exit rate"] = summary["Exit_Rate"].map(lambda x: f"{x:.1%}")
-    summary["Mean balance"] = summary["Mean_Balance"].map(lambda x: f"{x:,.2f}")
-    st.dataframe(summary[["Geography", "Gender", "Age band", "Customers", "Exited", "Exit rate", "Mean balance"]],
-                 use_container_width=True, hide_index=True)
-    st.download_button(
-        "Download filtered segment summary (CSV)",
-        summary.to_csv(index=False).encode("utf-8"),
-        file_name="filtered_churn_segment_summary.csv",
-        mime="text/csv",
-    )
-    st.caption("Demographic differences are for auditing and service improvement—not for discriminatory pricing, eligibility, or service restrictions.")
-
-with explore:
-    st.subheader("Numeric variable distributions")
-    numeric_col = st.selectbox(
-        "Choose a variable",
-        ["Age", "CreditScore", "Tenure", "Balance", "NumOfProducts", "EstimatedSalary"],
-    )
-    fig = px.histogram(filtered, x=numeric_col, color="Outcome", barmode="overlay", opacity=0.72,
-                       title=f"Distribution of {numeric_col} by customer outcome")
+    with b:
+        st.markdown('**Segment summary**')
+        st.dataframe(seg.sort_values('Churn rate (%)',ascending=False).style.format({'Churn rate (%)':'{:.2f}%','MeanAge':'{:.1f}','MeanBalance':'€{:,.0f}'}), use_container_width=True, hide_index=True)
+    st.subheader('Age × tenure heatmap')
+    heat = f.copy()
+    heat['Age group'] = pd.cut(heat['Age'], bins=[0,25,35,45,55,65,120], labels=['≤25','26–35','36–45','46–55','56–65','66+'], include_lowest=True)
+    heatmap = heat.pivot_table(index='Age group', columns='Tenure', values='Exited', aggfunc='mean', observed=False)*100
+    fig = px.imshow(heatmap, labels=dict(x='Tenure (years)',y='Age group',color='Churn rate (%)'), aspect='auto', color_continuous_scale='RdYlBu_r', text_auto='.1f')
     st.plotly_chart(fig, use_container_width=True)
 
-    left, right = st.columns(2)
-    with left:
-        fig = px.box(filtered, x="Outcome", y="Age", color="Outcome", title="Age by outcome")
-        st.plotly_chart(fig, use_container_width=True)
-    with right:
-        fig = px.scatter(filtered.sample(min(2500, len(filtered)), random_state=42),
-                         x="CreditScore", y="Balance", color="Outcome", hover_data=["Age", "Geography"],
-                         title="Credit score vs balance (sampled for display)")
-        st.plotly_chart(fig, use_container_width=True)
+with t_explorer:
+    st.subheader('High-value customer churn explorer')
+    st.write('Prioritize review using balance and estimated salary thresholds. These are configurable screening rules, not a predictive model.')
+    a,b = st.columns(2)
+    bal = pd.to_numeric(f['Balance'], errors='coerce').fillna(0)
+    sal = pd.to_numeric(f['EstimatedSalary'], errors='coerce').fillna(0) if 'EstimatedSalary' in f else pd.Series(0,index=f.index)
+    with a: balance_cut = st.slider('Minimum balance (€)', 0, int(max(100000, bal.max())), int(bal.quantile(.75)), step=5000)
+    with b: salary_cut = st.slider('Minimum estimated salary (€)', 0, int(max(200000, sal.max())), int(sal.quantile(.75)), step=5000)
+    high = f[(pd.to_numeric(f['Balance'],errors='coerce') >= balance_cut) | (pd.to_numeric(f.get('EstimatedSalary',0),errors='coerce') >= salary_cut)].copy()
+    high['Customer status'] = high['Exited'].map({1:'Exited',0:'Retained'}).fillna('Unknown')
+    high['Screening reason'] = high.apply(lambda r: 'High balance and salary' if pd.notna(r.get('Balance')) and r.get('Balance',0)>=balance_cut and pd.notna(r.get('EstimatedSalary')) and r.get('EstimatedSalary',0)>=salary_cut else ('High balance' if pd.notna(r.get('Balance')) and r.get('Balance',0)>=balance_cut else 'High estimated salary'),axis=1)
+    h1,h2,h3 = st.columns(3)
+    h1.metric('High-value screen matches', f'{len(high):,}')
+    h2.metric('Exited in this group', f'{int((high.Exited==1).sum()):,}')
+    h3.metric('Group churn rate', f'{(high.Exited.mean()*100):.2f}%' if len(high) else '0.00%')
+    cols = [c for c in ['CustomerId','Geography','Age','Tenure','CreditScore','NumOfProducts','Balance','EstimatedSalary','IsActiveMember','Customer status','Screening reason'] if c in high.columns]
+    st.dataframe(high[cols].sort_values(['Exited','Balance'],ascending=[False,False]), use_container_width=True, hide_index=True)
+    st.download_button('⬇️ Download high-value segment CSV', high[cols].to_csv(index=False).encode('utf-8'), 'high_value_churn_segment.csv', 'text/csv')
+    st.caption('Use customer-level output only in authorized internal settings. Avoid exposing personal identifiers in public repositories or presentations.')
 
-    st.subheader("Filtered data preview")
-    # Do not display direct identifiers such as customer ID or surname.
-    preview_cols = ["Year", "CreditScore", "Geography", "Gender", "Age", "Tenure",
-                    "Balance", "NumOfProducts", "HasCrCard", "IsActiveMember",
-                    "EstimatedSalary", "Exited"]
-    st.dataframe(filtered[preview_cols].head(100), use_container_width=True, hide_index=True)
-    st.download_button(
-        "Download filtered analysis data (CSV)",
-        filtered[preview_cols].to_csv(index=False).encode("utf-8"),
-        file_name="filtered_customer_churn_data.csv",
-        mime="text/csv",
-    )
+with t_data:
+    st.subheader('Data quality checks')
+    q1,q2,q3 = st.columns(3)
+    q1.metric('Rows', f'{len(df):,}')
+    q2.metric('Duplicate rows', f'{int(df.duplicated().sum()):,}')
+    q3.metric('Missing cells', f'{int(df.isna().sum().sum()):,}')
+    quality = pd.DataFrame({'Column':df.columns,'Data type':[str(x) for x in df.dtypes], 'Missing values':df.isna().sum().values, 'Unique values':df.nunique(dropna=True).values})
+    st.dataframe(quality, use_container_width=True, hide_index=True)
+    if 'NumOfProducts' in df:
+        st.subheader('Product-count churn check')
+        prod = df.groupby('NumOfProducts').agg(Customers=('Exited','size'),Exited=('Exited','sum')).reset_index()
+        prod['Churn rate (%)'] = (prod.Exited/prod.Customers*100).round(2)
+        st.dataframe(prod, use_container_width=True, hide_index=True)
+        st.info('Very high churn in rare product-count groups can reflect small sample sizes or data issues. Validate those records before operational use.')
+    st.subheader('Filtered customer-level data')
+    safe_cols = [c for c in f.columns if c not in ['Surname']]
+    st.dataframe(f[safe_cols].head(500), use_container_width=True, hide_index=True)
+    st.download_button('⬇️ Download filtered dataset CSV', f[safe_cols].to_csv(index=False).encode('utf-8'), 'filtered_bank_churn_data.csv', 'text/csv')
 
-with quality:
-    st.subheader("Dataset profile")
-    q1, q2, q3 = st.columns(3)
-    q1.metric("Rows loaded", f"{len(raw):,}")
-    q2.metric("Columns loaded", f"{raw.shape[1]:,}")
-    q3.metric("Missing cells", f"{int(raw.isna().sum().sum()):,}")
-    quality_table = pd.DataFrame({
-        "Column": raw.columns,
-        "Missing values": [int(raw[c].isna().sum()) for c in raw.columns],
-        "Unique values": [int(raw[c].nunique(dropna=True)) for c in raw.columns],
-        "Data type": [str(raw[c].dtype) for c in raw.columns],
-    })
-    st.dataframe(quality_table, use_container_width=True, hide_index=True)
-    st.write("**Checks and cautions**")
-    st.write(f"- Duplicate customer IDs: **{int(raw['CustomerId'].duplicated().sum()) if 'CustomerId' in raw else 'not available'}**")
-    if "NumOfProducts" in raw and "Exited" in raw:
-        psummary = raw.groupby("NumOfProducts")["Exited"].agg(["count", "mean"]).reset_index()
-        psummary["Exit rate"] = psummary["mean"].map(lambda x: f"{x:.1%}")
-        st.write("- Product-count outcome rates should be checked against the data dictionary, especially where groups are small.")
-        st.dataframe(psummary[["NumOfProducts", "count", "Exit rate"]], hide_index=True, use_container_width=True)
-    st.info(
-        "This dashboard provides descriptive analytics. The dataset does not establish why customers exited, "
-        "and its sample may not represent all European bank customers. Validate data definitions before policy or business decisions."
-    )
+st.divider()
+st.caption(f'Source file: {DATA_PATH.name} • Showing {len(f):,} of {len(df):,} records after filters • Churn rate = exited customers / customers in current view.')
 
-st.sidebar.divider()
-st.sidebar.caption("Built with Streamlit · Use aggregated insights responsibly")
